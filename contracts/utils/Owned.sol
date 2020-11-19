@@ -13,7 +13,7 @@ contract Owned {
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
 
     modifier onlyOwner() {
-        require(isOwner());
+        require(isOwner(), "call by non-owner");
         _;
     }
 

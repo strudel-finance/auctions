@@ -1,6 +1,8 @@
 const {
   BN,           // Big Number support
-  time
+  time,
+  expectRevert,
+  constants
 } = require('@openzeppelin/test-helpers');
 
 const DutchSwapAuction = artifacts.require("DutchSwapAuction");
@@ -55,7 +57,16 @@ contract("AuctionManager", (accounts) => {
     // participate in vBTC buy auction
     await time.increase((60 * 60 * 11) + (60 * 45));
     await vBtc.approve(auction.address, new BN('100').mul(ONE), {from: bob});
-    await auction.commitTokens(ONE, {from: bob});
+    await auction.commitTokens('7000000000000000', {from: bob});
+
+    // try to ratate before finished:
+    await expectRevert(
+      auctionManager.rotateAuctions(),
+      "previous auction hasn't ended"
+    );
+
+    // buy the rest
+    await auction.commitTokens('8000000000000000', {from: bob});
 
     // rotate into an auction that sells vBTC
     await time.increase((60 * 60 * 12));
@@ -87,12 +98,16 @@ contract("AuctionManager", (accounts) => {
     await strudel.approve(auction2.address, new BN('1410').mul(ONE), {from: alice});
     await auction2.commitTokens(new BN('1410').mul(ONE), {from: alice});
     bal = await strudel.balanceOf(auction2.address);
-    console.log('auction: ', bal.toString());
     assert.equal(bal.divRound(ONE).toString(), '1410');
     
 
     // rotate into an auction that sells vBTC
     await time.increase(60 * 60 * 12);
+    // manually finalize auction
+    await auction2.finaliseAuction();
+    // set up prices close to peg, to test dust threshold
+    await vBtcPriceOracle.update('31999900');
+    // rotate should fail gracefully on finalize and cary on
     await auctionManager.rotateAuctions();
 
     // check results
@@ -102,11 +117,25 @@ contract("AuctionManager", (accounts) => {
     // 0.000005 * 1410 = ~0.00705
     bal = await vBtc.balanceOf(alice);
     assert.equal(bal.divRound(new BN('10000000000000')).toString(), '705');
-    console.log('alice: ', bal.toString());
+
+    const current = await auctionManager.currentAuction();
+    assert.equal(current, constants.ZERO_ADDRESS);
   });
 
-  // TODO: manually finalize auction, then call rotate
-  it("should allow to manually finalize auction", async () => {
+  it("should allow only owner to swipe and renounce", async () => {
+    await vBtc.transfer(auctionManager.address, '1000000000', {from: bob});
 
+    await expectRevert.unspecified(
+      auctionManager.recoverTokens(vBtc.address, 0, {from: bob})
+    );
+    await auctionManager.recoverTokens(vBtc.address, 0, {from: alice});
+    const bal = await vBtc.balanceOf(auctionManager.address);
+    assert.equal(bal, 0);
+
+    await expectRevert.unspecified(
+      auctionManager.renounceMinter({from: bob})
+    );
+    await auctionManager.renounceMinter({from: alice});
   });
+
 });
